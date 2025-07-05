@@ -321,6 +321,7 @@ struct parser
 	int list_size;
 	
 	int panic;
+	int syntax_error; /* used to supress semantic errors if a syntax error occurs */
 	int had_error;
 	
 	struct node *current_tb;
@@ -332,6 +333,7 @@ void error(struct parser *parser, char *msg)
 	
 	printf("ERROR: %s\n", msg);
 	parser->panic = 1;
+	parser->syntax_error = 1;
 	parser->had_error = 1;
 }
 
@@ -396,7 +398,7 @@ void val(struct parser *parser)
 			funcparens(parser);
 		}
 		
-		if(!parser->panic)
+		if(!parser->syntax_error)
 		{
 			int found = search_entry(parser->current_tb, temp_lex, temp_type);
 			
@@ -512,7 +514,7 @@ void flow(struct parser *parser)
 {	
 	expect_lex(parser, parser->current_tk->lex); /* previous function says it has to be "if" or "while" */
 	
-	if(!parser->panic) parser->current_tb = push_tb(parser->current_tb);
+	if(!parser->syntax_error) parser->current_tb = push_tb(parser->current_tb);
 	
 	expect_lex(parser, "(");
 	parser_and(parser);
@@ -520,7 +522,7 @@ void flow(struct parser *parser)
 	body(parser);
 	expect_lex(parser, ")");
 	
-	if(!parser->panic) parser->current_tb = pop_tb(parser->current_tb);
+	if(!parser->syntax_error) parser->current_tb = pop_tb(parser->current_tb);
 }
 
 void parser_return(struct parser *parser)
@@ -534,7 +536,7 @@ void parser_print(struct parser *parser)
 {
 	expect_lex(parser, "print");
 	
-	if(!parser->panic)
+	if(!parser->syntax_error)
 	{
 		int found = search_entry(parser->current_tb, parser->current_tk->lex, var_type);
 		
@@ -551,7 +553,7 @@ void next(struct parser *parser)
 {
 	if(strcmp(parser->current_tk->lex, "=") == 0)
 	{
-		if(!parser->panic)
+		if(!parser->syntax_error)
 		{
 			int found = search_entry(parser->current_tb, (parser->current_tk-1)->lex, var_type);
 			
@@ -563,7 +565,7 @@ void next(struct parser *parser)
 		expect_lex(parser, ";");
 	} else if(strcmp(parser->current_tk->lex, "(") == 0)
 	{
-		if(!parser->panic)
+		if(!parser->syntax_error)
 		{
 			int found = search_entry(parser->current_tb, (parser->current_tk-1)->lex, func_type);
 			
@@ -588,7 +590,7 @@ void declaration(struct parser *parser)
 {
 	expect_lex(parser, "decl");
 	
-	if(!parser->panic) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
+	if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
 	
 	expect_type(parser, id);
 	expect_lex(parser, "=");
@@ -656,11 +658,11 @@ void funcdecl(struct parser *parser)
 {	
 	expect_lex(parser, "(");
 
-	if(!parser->panic) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, func_type);
+	if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, func_type);
 
 	expect_type(parser, id);
 	
-	if(!parser->panic) parser->current_tb = push_tb(parser->current_tb); /* new scope for inside of function */
+	if(!parser->syntax_error) parser->current_tb = push_tb(parser->current_tb); /* new scope for inside of function */
 	
 	if(parser->current_tk->type == id)
 	{
@@ -669,7 +671,7 @@ void funcdecl(struct parser *parser)
 			THESE ARE FOR FUNCTION ARGUMENTS, ***MIGHT*** NEED TO FIX SYMBOL TABLES LATER FOR THIS
 		*/
 		
-		if(!parser->panic) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
+		if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
 		
 		expect_type(parser, id);
 		
@@ -679,7 +681,7 @@ void funcdecl(struct parser *parser)
 			
 			expect_lex(parser, ",");
 			
-			if(!parser->panic) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
+			if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
 			
 			expect_type(parser, id);
 		}
@@ -691,7 +693,7 @@ void funcdecl(struct parser *parser)
 	
 	expect_lex(parser, ")");
 	
-	if(!parser->panic) parser->current_tb = pop_tb(parser->current_tb);
+	if(!parser->syntax_error) parser->current_tb = pop_tb(parser->current_tb);
 }
 
 void funclist(struct parser *parser)
@@ -709,9 +711,10 @@ int main(void)
 	struct parser *parser = malloc(sizeof(struct parser));
 	parser->tk_list = malloc(sizeof(struct token));
 	
-	parser->code = "(f ->)(x y, z -> decl x = y+z+x;)";
+	parser->code = "(f -> decl r = x+y+z; decl l = x+y+z;)";
 	parser->begin = 0;
 	parser->panic = 0;
+	parser->syntax_error = 0;
 	parser->had_error = 0;
 	parser->list_size = 0;
 	
