@@ -1,0 +1,28 @@
+
+funclist -> (funcdecl)*
+funcdecl -> "(" id (id ("," id)*)? "->" body ")"
+body -> (statement)*
+statement -> declaration | idstart | print | return | flow
+declaration -> "decl" id "=" and ";"
+idstart-> id next
+next -> "=" and ";" | funcparens ";" 
+print -> "print" id "." num ";"
+return -> "ret" and ";"
+flow -> "(" ("if" | "while") and "->" body ")"
+and -> or ("and" or)*
+or -> rel ("or" rel)*
+rel -> expr (("<" | ">") expr)*
+expr -> term(("+" | "-") term
+term -> val (("*" | "/") val)*
+val -> id (funcparens)? | num | "(" and ")"
+funcparens -> "(" (expr ("," expr)*)? ")"
+
+(main ->
+	decl a = 5;
+	decl b = 3;
+	decl c = 10;
+
+	if(a < b ->
+		a = a + b;
+	)
+)
