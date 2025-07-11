@@ -191,6 +191,8 @@ struct entry
 {
 	char *name;
 	enum type type;
+	int rel_addr;
+	int num_of_args;
 };
 
 struct node
@@ -200,9 +202,9 @@ struct node
 	struct node *back; /* to implement cactus stack */
 };
 
-int search_entry(struct node *current, char *name, enum type type)
+struct entry * search_entry(struct node *current, char *name, enum type type)
 {
-    int found = 0;
+    struct entry *entry = NULL;
     
     while(current != NULL)
     {
@@ -211,22 +213,25 @@ int search_entry(struct node *current, char *name, enum type type)
         {
             if(strcmp(current->entry[i-1].name, name) == 0 && current->entry[i-1].type == type)
             {
-                found = 1;
+				entry = &current->entry[i-1];
+				goto found; /* break */
             }
         }
         
         current = current->back;
     }
+	
+	found:
     
-    if(!found)
+    if(entry == NULL)
     {
         printf("ERROR! '%s' hasn't been declared!\n", name);
     }
 	
-	return found;
+	return entry;
 }
 
-struct node * create_entry(struct node *current, char *name, enum type type)
+struct node * create_entry(struct node *current, int rel_addr, char *name, enum type type)
 {
     if(current == NULL)
     {
@@ -252,6 +257,7 @@ struct node * create_entry(struct node *current, char *name, enum type type)
     
     current->entry[current->num_of_entries-1].name = temp_name;
     current->entry[current->num_of_entries-1].type = type;
+    current->entry[current->num_of_entries-1].rel_addr = rel_addr;
     
     return current;
 }
@@ -312,6 +318,79 @@ struct node * pop_tb(struct node *current)
     return temp;
 }
 
+enum inst_type
+{
+    label,
+    decl,
+    push,
+    pop
+};
+
+struct inst
+{
+	enum inst_type type;
+	int *args;
+	int num_of_args;
+};
+
+struct vm
+{
+	struct inst *code;
+	int num_of_insts;
+	int *label_list;
+	int num_of_labels;
+	int pc;
+};
+
+struct vm * emit_code(struct vm *vm, enum inst_type type, int *args)
+{
+    vm->num_of_insts++;
+    vm->code = realloc(vm->code, vm->num_of_insts * sizeof(struct inst));
+    vm->code[vm->num_of_insts-1].type = type;
+    vm->code[vm->num_of_insts-1].args = args;
+    
+    return vm;
+}
+
+struct vm * create_vm(void)
+{
+    struct vm *temp_vm = malloc(sizeof(struct vm));
+    
+    temp_vm->code = NULL;
+    temp_vm->num_of_insts = 0;
+    temp_vm->label_list = NULL;
+	temp_vm->num_of_labels = 0;
+    temp_vm->pc = 0;
+    
+    return temp_vm;
+}
+
+void print_code(struct vm *vm)
+{
+    int i;
+    for(i = 0; i<vm->num_of_insts; i++)
+    {
+        printf("(");
+        
+        switch(vm->code[i].type)
+        {
+            case label: printf("label"); break;
+            case decl:  printf("decl");  break;
+            case push:  printf("push");  break;
+            case pop:   printf("pop");   break;
+        }
+        
+        int j;
+        for(j = 0; j<vm->code[i].num_of_args; j++)
+        {
+            if(j == 0) printf(" %d", vm->code[i].args[j]);
+            if(j > 0)  printf(", %d", vm->code[i].args[j]);
+        }
+        
+        printf(")\n");
+    }
+}
+
 struct parser
 {
 	char *code;
@@ -325,7 +404,10 @@ struct parser
 	int had_error;
 	
 	struct node *current_tb;
-};
+	int rel_addr;
+	
+	struct vm *vm;
+}; 
 
 void error(struct parser *parser, char *msg)
 {
@@ -359,8 +441,10 @@ void expect_type(struct parser *parser, enum tk_type type)
 
 void parser_and(struct parser *parser); /* forward declaration for funcparens and val */
 
-void funcparens(struct parser *parser)
+int funcparens(struct parser *parser)
 {
+	int args = 0;
+	
 	expect_lex(parser, "(");
 	
 	if(parser->current_tk->type == id  || 
@@ -369,24 +453,30 @@ void funcparens(struct parser *parser)
 	{
 		parser_and(parser);
 		
+		args++;
+		
 		while(strcmp(parser->current_tk->lex, ",") == 0)
 		{
 			if(parser->panic) break;
 			
 			expect_lex(parser, ",");
 			parser_and(parser);
+			
+			args++;
 		}
 	}
 	
 	expect_lex(parser, ")");
+	
+	return args;
 }
 
 void val(struct parser *parser)
 {	
+	struct entry *entry;
+
 	if(parser->current_tk->type == id)
 	{
-		//printf("push %s\n", parser->current_tk->lex);
-		
 		char *temp_lex = parser->current_tk->lex;
 		enum type temp_type = var_type;
 		
@@ -394,20 +484,38 @@ void val(struct parser *parser)
 		
 		if(strcmp(parser->current_tk->lex, "(") == 0)
 		{
-			temp_type = func_type;
-			funcparens(parser);
-		}
-		
-		if(!parser->syntax_error)
+			if(!parser->syntax_error)
+			{
+				entry = search_entry(parser->current_tb, temp_lex, func_type);
+				
+				int args = funcparens(parser);
+				
+				if(entry == NULL) parser->had_error = 1;
+				
+				if(entry->num_of_args != args)
+				{
+					printf("ERROR: incorrect number of arguments!\n");
+					parser->had_error = 1;
+				} else
+				{
+					printf("call &%d\n", entry->rel_addr);
+				}
+			}
+		} else
 		{
-			int found = search_entry(parser->current_tb, temp_lex, temp_type);
+			if(!parser->syntax_error)
+			{
+				entry = search_entry(parser->current_tb, temp_lex, temp_type);
+				
+				if(entry == NULL) parser->had_error = 1;
+			}
 			
-			if(!found) parser->had_error = 1;
+			printf("push &%d\n", entry->rel_addr);
 		}
 	} else if(parser->current_tk->type == num ||
 			  parser->current_tk->type == uint)
 	{
-		//printf("push %s\n", parser->current_tk->lex);
+		printf("push #%s\n", parser->current_tk->lex);
 		expect_type(parser, parser->current_tk->type);
 	} else if(strcmp(parser->current_tk->lex, "(") == 0)
 	{
@@ -429,12 +537,12 @@ void term(struct parser *parser)
 	{
 		if(parser->panic) break;
 		
-		//char *temp = parser->current_tk->lex;
+		char *temp = parser->current_tk->lex;
 		
 		expect_lex(parser, parser->current_tk->lex);
 		val(parser);
 		
-		//printf("%s\n", temp);
+		printf("%s\n", temp);
 	}
 }
 
@@ -447,12 +555,12 @@ void expr(struct parser *parser)
 	{
 		if(parser->panic) break;
 		
-		//char *temp = parser->current_tk->lex;
+		char *temp = parser->current_tk->lex;
 		
 		expect_lex(parser, parser->current_tk->lex);
 		term(parser);
 		
-		//printf("%s\n", temp);
+		printf("%s\n", temp);
 	}
 }
 
@@ -465,12 +573,12 @@ void rel(struct parser *parser)
 	{
 		if(parser->panic) break;
 		
-		//char *temp = parser->current_tk->lex;
+		char *temp = parser->current_tk->lex;
 		
 		expect_lex(parser, parser->current_tk->lex);
 		expr(parser);
 		
-		//printf("%s\n", temp);
+		printf("%s\n", temp);
 	}
 }
 
@@ -482,12 +590,12 @@ void parser_or(struct parser *parser)
 	{
 		if(parser->panic) break;
 		
-		//char *temp = parser->current_tk->lex;
+		char *temp = parser->current_tk->lex;
 		
 		expect_lex(parser, "or");
 		rel(parser);
 		
-		//printf("%s\n", temp);
+		printf("%s\n", temp);
 	}
 } 
 
@@ -499,12 +607,12 @@ void parser_and(struct parser *parser)
 	{
 		if(parser->panic) break;
 		
-		//char *temp = parser->current_tk->lex;
+		char *temp = parser->current_tk->lex;
 		
 		expect_lex(parser, "and");
 		parser_or(parser);
 		
-		//printf("%s\n", temp);
+		printf("%s\n", temp);
 	}
 } 
 
@@ -512,14 +620,42 @@ void body(struct parser *parser); /* forward declaration of body for flow */
 
 void flow(struct parser *parser)
 {	
+	char *temp = parser->current_tk->lex;
+
 	expect_lex(parser, parser->current_tk->lex); /* previous function says it has to be "if" or "while" */
 	
 	if(!parser->syntax_error) parser->current_tb = push_tb(parser->current_tb);
 	
 	expect_lex(parser, "(");
-	parser_and(parser);
+	
+	int temp_label = parser->vm->num_of_labels;
+	
+	if(strcmp("if", temp) == 0)
+	{
+		parser_and(parser);
+		printf("jump if false l%d:\n", temp_label);
+		parser->vm->num_of_labels++;
+	} else if(strcmp("while", temp) == 0)
+	{
+		printf("l%d:\n", temp_label);
+		parser_and(parser);
+		printf("jump if false l%d:\n", temp_label+1);
+		parser->vm->num_of_labels += 2;
+	}
+	
 	expect_lex(parser, "->");
+	
 	body(parser);
+	
+	if(strcmp("if", temp) == 0)
+	{
+		printf("l%d:\n", temp_label);
+	} else if(strcmp("while", temp) == 0)
+	{
+		printf("jump l%d:\n", temp_label);
+		printf("l%d:\n", temp_label+1);
+	}
+	
 	expect_lex(parser, ")");
 	
 	if(!parser->syntax_error) parser->current_tb = pop_tb(parser->current_tb);
@@ -530,49 +666,76 @@ void parser_return(struct parser *parser)
 	expect_lex(parser, "ret");
 	parser_and(parser);
 	expect_lex(parser, ";");
+	
+	printf("ret top\n");
 }
 
 void parser_print(struct parser *parser)
 {
+	struct entry *entry;
+	
 	expect_lex(parser, "print");
 	
 	if(!parser->syntax_error)
 	{
-		int found = search_entry(parser->current_tb, parser->current_tk->lex, var_type);
+		entry = search_entry(parser->current_tb, parser->current_tk->lex, var_type);
 		
-		if(!found) parser->had_error = 1;
+		if(entry == NULL) parser->had_error = 1;
 	}
+	
+	printf("push &%d\n", entry->rel_addr);
 	
 	expect_type(parser, id);
 	expect_lex(parser, ".");
+	
+	printf("push #%s\n", parser->current_tk->lex);
+	printf("print\n");
+	
 	expect_type(parser, uint);
 	expect_lex(parser, ";");
 }
 
 void next(struct parser *parser)
 {
+	struct entry *entry;
+	
 	if(strcmp(parser->current_tk->lex, "=") == 0)
 	{
 		if(!parser->syntax_error)
 		{
-			int found = search_entry(parser->current_tb, (parser->current_tk-1)->lex, var_type);
+			entry = search_entry(parser->current_tb, (parser->current_tk-1)->lex, var_type);
 			
-			if(!found) parser->had_error = 1;
+			if(entry == NULL) parser->had_error = 1;
 		}
+		
+		printf("push &%d\n", entry->rel_addr);
 		
 		expect_lex(parser, "=");
 		parser_and(parser);
+		
+		printf("=\n");
+		
 		expect_lex(parser, ";");
 	} else if(strcmp(parser->current_tk->lex, "(") == 0)
 	{
 		if(!parser->syntax_error)
 		{
-			int found = search_entry(parser->current_tb, (parser->current_tk-1)->lex, func_type);
+			entry = search_entry(parser->current_tb, (parser->current_tk-1)->lex, func_type);
 			
-			if(!found) parser->had_error = 1;
+			int args = funcparens(parser);
+			
+			if(entry == NULL) parser->had_error = 1;
+			
+			if(entry->num_of_args != args)
+			{
+				printf("ERROR: incorrect number of arguments!\n");
+				parser->had_error = 1;
+			} else
+			{
+				printf("call &%d\n", entry->rel_addr);
+			}
 		}
 		
-		funcparens(parser);	
 		expect_lex(parser, ";");
 	} else
 	{
@@ -590,11 +753,21 @@ void declaration(struct parser *parser)
 {
 	expect_lex(parser, "decl");
 	
-	if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
+	if(!parser->syntax_error)
+	{
+		parser->current_tb = create_entry(parser->current_tb, parser->rel_addr, parser->current_tk->lex, var_type);
+		parser->rel_addr++;
+	}
+	
+	printf("declare local\n");
+	printf("push &%d\n", parser->rel_addr-1);
 	
 	expect_type(parser, id);
 	expect_lex(parser, "=");
 	parser_and(parser);
+	
+	printf("=\n");
+	
 	expect_lex(parser, ";");
 }
 
@@ -658,11 +831,22 @@ void funcdecl(struct parser *parser)
 {	
 	expect_lex(parser, "(");
 
-	if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, func_type);
+	/* rel_addr is not incremented for function declarations */
+	if(!parser->syntax_error)
+	{
+		parser->current_tb = create_entry(parser->current_tb, parser->vm->num_of_labels, parser->current_tk->lex, func_type);
+		parser->vm->num_of_labels++;
+	}
+	
+	printf("l%d:\n", parser->vm->num_of_labels-1);
 
 	expect_type(parser, id);
 	
 	if(!parser->syntax_error) parser->current_tb = push_tb(parser->current_tb); /* new scope for inside of function */
+	
+	
+	parser->current_tb->back->entry[parser->current_tb->back->num_of_entries-1].num_of_args = 0;
+	
 	
 	if(parser->current_tk->type == id)
 	{
@@ -671,7 +855,14 @@ void funcdecl(struct parser *parser)
 			THESE ARE FOR FUNCTION ARGUMENTS, ***MIGHT*** NEED TO FIX SYMBOL TABLES LATER FOR THIS
 		*/
 		
-		if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
+		if(!parser->syntax_error)
+		{
+			printf("declare local\n");
+			
+			parser->current_tb = create_entry(parser->current_tb, parser->rel_addr, parser->current_tk->lex, var_type);
+			parser->current_tb->back->entry[parser->current_tb->back->num_of_entries-1].num_of_args++;
+			parser->rel_addr++;
+		}
 		
 		expect_type(parser, id);
 		
@@ -681,7 +872,14 @@ void funcdecl(struct parser *parser)
 			
 			expect_lex(parser, ",");
 			
-			if(!parser->syntax_error) parser->current_tb = create_entry(parser->current_tb, parser->current_tk->lex, var_type);
+			if(!parser->syntax_error)
+			{
+				printf("declare local\n");
+				
+				parser->current_tb = create_entry(parser->current_tb, parser->rel_addr, parser->current_tk->lex, var_type);
+				parser->current_tb->back->entry[parser->current_tb->back->num_of_entries-1].num_of_args++;
+				parser->rel_addr++;
+			}
 			
 			expect_type(parser, id);
 		}
@@ -693,15 +891,23 @@ void funcdecl(struct parser *parser)
 	
 	expect_lex(parser, ")");
 	
+	printf("ret\n");
+	
 	if(!parser->syntax_error) parser->current_tb = pop_tb(parser->current_tb);
 }
 
 void funclist(struct parser *parser)
 {
+	parser->current_tb = push_tb(parser->current_tb); /* global scope for function declarations */
+	
 	while(parser->current_tk->type != eoi)
 	{
+		parser->rel_addr = 0;
+		
 		funcdecl(parser);
 	}
+	
+	if(!parser->syntax_error) parser->current_tb = pop_tb(parser->current_tb);
 
 	expect_lex(parser, "\0");
 }
@@ -711,7 +917,7 @@ int main(void)
 	struct parser *parser = malloc(sizeof(struct parser));
 	parser->tk_list = malloc(sizeof(struct token));
 	
-	parser->code = "(f -> decl r = x+y+z; decl l = x+y+z;)";
+	parser->code = "(f ->) (h a -> ret f();)";
 	parser->begin = 0;
 	parser->panic = 0;
 	parser->syntax_error = 0;
@@ -719,7 +925,9 @@ int main(void)
 	parser->list_size = 0;
 	
 	parser->current_tb = NULL;
-	parser->current_tb = push_tb(parser->current_tb); /* global scope for function declarations */
+	parser->rel_addr = 0;
+	
+	parser->vm = create_vm();
 	
 	/* put all of the tokens into a list (tk_list) */
 	do
@@ -736,7 +944,7 @@ int main(void)
 	
 	getchar();
 	
-	/* clears out symbol table stack if an error occurs; this is won't do anything if the program
+	/* clears out symbol table stack if an error occurs; this won't do anything if the program
 	   executes properly */
 	while(parser->current_tb != NULL)
 	{
