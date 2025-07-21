@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 enum tk_type
 {
@@ -192,7 +193,7 @@ struct entry
 {
 	char *name;
 	enum type type;
-	int rel_addr;
+	float rel_addr;
 	int num_of_args;
 };
 
@@ -324,6 +325,7 @@ enum inst_type
     label,
     decl,
     push_adr,
+	push_loc,
     push_val,
     pop,
 	print,
@@ -351,10 +353,58 @@ struct inst
 	int num_of_args;
 };
 
+struct opstack
+{
+    float *stack;
+    int top;
+};
+
+struct opstack * create_opstack(void)
+{
+    struct opstack *temp = malloc(sizeof(struct opstack));
+    
+    temp->stack = NULL;
+    temp->top = -1;
+    
+    return temp;
+}
+
+struct opstack * push_op(struct opstack *op, float n)
+{
+    op->top++;
+    op->stack = realloc(op->stack, (op->top + 1) * sizeof(float));
+    op->stack[op->top] = n;
+    
+    return op;
+}
+
+struct opstack * pop_op(struct opstack *op)
+{
+    if(op->stack != NULL)
+    {
+        op->top--;
+        
+        if(op->top == -1)
+        {
+            op->stack = NULL;
+        } else
+        {
+            op->stack = realloc(op->stack, (op->top + 1) * sizeof(float));
+        }
+    } else
+    {
+        printf("RUNTIME ERROR: unable to pop!\n");
+        exit(-1);
+    }
+    
+    return op;
+}
+
 struct frame
 {
     float *locals;
     int num_of_locals;
+	struct opstack *op;
 	float *ret_val;
 };
 
@@ -379,6 +429,7 @@ struct frstack * push_frame(struct frstack *stack)
     stack->frame = realloc(stack->frame, (stack->top + 1) * sizeof(struct frame));
     stack->frame[stack->top].locals = NULL;
     stack->frame[stack->top].num_of_locals = 0;
+	stack->frame[stack->top].op = create_opstack();
     stack->frame[stack->top].ret_val = NULL;
     
     return stack;
@@ -406,18 +457,29 @@ struct frstack * pop_frame(struct frstack *stack)
 void print_top(struct frstack *stack)
 {
     printf("(");
-    
-    int i;
-    for(i = 0; i<stack->frame[stack->top].num_of_locals; i++)
-    {
-        if(i == 0) printf("%f", stack->frame[stack->top].locals[i]);
-        if(i > 0)  printf(", %f", stack->frame[stack->top].locals[i]);
+	
+	if(stack->frame[stack->top].locals != NULL)
+	{
+		int i;
+		for(i = 0; i<stack->frame[stack->top].num_of_locals; i++)
+		{
+			if(i == 0) printf("%f", stack->frame[stack->top].locals[i]);
+			if(i > 0)  printf(", %f", stack->frame[stack->top].locals[i]);
+		}
     }
-    
+	
     printf(")\n");
     
     printf("%d\n", stack->frame[stack->top].num_of_locals);
-    
+	
+	if(stack->frame[stack->top].op->stack == NULL)
+	{
+		printf("NULL\n");
+    } else
+	{
+		printf("%f\n", stack->frame[stack->top].op->stack[stack->frame[stack->top].op->top]);
+	}
+	
     if(stack->frame[stack->top].ret_val == NULL)
     {
         printf("NULL\n");
@@ -442,10 +504,97 @@ struct vm
 	int num_of_insts;
 	float *label_list;
 	int num_of_labels;
-	int pc;
 	
 	struct frstack *stack;
 };
+
+void run_vm(struct vm *vm)
+{
+	int i;
+	for(i = 0; i<vm->num_of_insts; i++)
+	{
+		struct frame * current_frame = &vm->stack->frame[vm->stack->top];
+		
+		float top = current_frame->op->stack[current_frame->op->top];
+		float topminus1 = current_frame->op->stack[current_frame->op->top-1];
+		float inter;
+		
+		switch(vm->code[i].type)
+		{
+			case decl: vm->stack = declare_local(vm->stack, vm->code[i].args[0]); break;
+			case label: break;
+			
+			case push_adr: current_frame->op = push_op(current_frame->op, vm->code[i].args[0]); break;
+			case push_loc: current_frame->op = push_op(current_frame->op, current_frame->locals[(int)vm->code[i].args[0]]); break;
+			case push_val: current_frame->op = push_op(current_frame->op, vm->code[i].args[0]); break;
+			
+			case set_equal:
+				current_frame->locals[(int)current_frame->op->stack[current_frame->op->top]] = current_frame->op->stack[current_frame->op->top-1];
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+			break;
+			
+			case less_than:
+				inter = top < topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, inter);
+			break;
+			
+			case more_than:
+				inter = top > topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, inter);
+			break;
+			
+			case plus:
+				inter = top + topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, inter);
+			break;
+			
+			case minus:
+				inter = top - topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, inter);
+			break;
+			
+			case multiply:
+				inter = top * topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, inter);
+			break;
+			
+			case divide:
+				inter = top / topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, inter);
+			break;
+			
+			case and:
+				inter = (unsigned int)top && (unsigned int)topminus1;
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, (float)inter);
+			break;
+			
+			case or:
+				inter = (unsigned int)floor(top) || (unsigned int)floor(topminus1);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = pop_op(current_frame->op);
+				current_frame->op = push_op(current_frame->op, (float)inter);
+			break;
+		}
+		
+		print_top(vm->stack);
+		getchar();
+	}
+}
 
 float * create_args(int num_of_args, ...)
 {
@@ -486,7 +635,6 @@ struct vm * create_vm(void)
     temp_vm->code = NULL;
     temp_vm->num_of_insts = 0;
     temp_vm->label_list = NULL;
-    temp_vm->pc = 0;
     
     temp_vm->stack = create_frstack();
     
@@ -505,6 +653,7 @@ void print_code(struct vm *vm)
             case label:     printf("label");     break;
             case decl:      printf("decl");      break;
             case push_adr:  printf("push_adr");  break;
+            case push_loc:  printf("push_loc");  break;
             case push_val:  printf("push_val");  break;
             case pop:       printf("pop");       break;
             case print:     printf("print");     break;
@@ -667,7 +816,7 @@ void val(struct parser *parser)
 			if(!parser->had_error)
 			{
 				float *args = create_args(1, entry->rel_addr);
-				parser->vm = emit_code(parser->vm, push_val, args, 1);
+				parser->vm = emit_code(parser->vm, push_loc, args, 1);
 			}
 		}
 	} else if(parser->current_tk->type == num ||
@@ -905,7 +1054,7 @@ void next(struct parser *parser)
 		
 		if(!parser->had_error)
 		{
-			float *args = create_args(1, (float)entry->rel_addr);
+			float *args = create_args(1, entry->rel_addr);
 			parser->vm = emit_code(parser->vm, push_adr, args, 1);
 		}
 		
@@ -1124,7 +1273,7 @@ int main(void)
 	struct parser *parser = malloc(sizeof(struct parser));
 	parser->tk_list = malloc(sizeof(struct token));
 	
-	parser->code = "(h -> if(1 < 2 -> while(1 < 2 -> decl a = 1; decl b = 2;))) (g ->)";
+	parser->code = "(f a, b -> decl c = a + b; ret c;) (g -> decl x = 5; f(x, 2); g();)";
 	parser->begin = 0;
 	parser->panic = 0;
 	parser->syntax_error = 0;
@@ -1149,6 +1298,9 @@ int main(void)
 	funclist(parser);
 	
 	print_code(parser->vm);
+	
+	run_vm(parser->vm);
+	
 	//printf("%d\n", parser->vm->code->args[0]);
 	
 	//int j;
